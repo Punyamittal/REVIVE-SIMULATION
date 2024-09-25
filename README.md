@@ -1,2 +1,202 @@
 # REVIVE-SIMULATION
- Simulation to project a drone through random obstacles from start point to end point
+ import pygame
+import random
+import math
+import time  # Import time module for the wait function
+
+# Initialize Pygame
+pygame.init()
+
+# Define constants
+WIDTH, HEIGHT = 800, 600
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+DRONE_SIZE = 20
+OBSTACLE_SIZE = 50
+SAFE_DISTANCE = 100
+MIN_OBSTACLE_DISTANCE = 30
+TURN_ANGLE = math.radians(10)
+TURN_SPEED_FACTOR = 0.5
+DISTANCE_CONVERSION_FACTOR = 0.002  # 1 cm = 0.002 km
+BATTERY_CONSUMPTION_PER_KM = 100  # 100% per km traveled
+SOLAR_GENERATION_PERCENT = 0.5
+REGENERATIVE_MOTOR_PERCENT = 0.1
+BATTERY_CHECK_INTERVAL = 5  # Print battery status every 5%
+RECHARGE_TO_PERCENT = 100  # Recharge to 100%
+
+# Set up display
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Autonomous Drone Navigation")
+
+# Define drone class
+class Drone:
+    def __init__(self, start_x, start_y, end_x, end_y):
+        self.x = start_x
+        self.y = start_y
+        self.velocity = 3
+        self.default_velocity = 3
+        self.dx = 0
+        self.dy = 0
+        self.target_x = end_x
+        self.target_y = end_y
+        self.heading = math.atan2(self.target_y - self.y, self.target_x - self.x)
+        self.last_heading = self.heading  # Track last heading
+        self.update_direction()
+        self.battery = 100  # Start with full battery
+        self.last_battery_check = self.battery
+        self.landing = False  # Flag to indicate if drone is landing
+        self.recharging = False  # Flag to indicate if drone is recharging
+
+    def update_direction(self):
+        dist_x = self.target_x - self.x
+        dist_y = self.target_y - self.y
+        distance = math.sqrt(dist_x**2 + dist_y**2)
+        if distance != 0:
+            self.dx = (dist_x / distance) * self.velocity
+            self.dy = (dist_y / distance) * self.velocity
+            self.heading = math.atan2(self.dy, self.dx)  # Update heading
+
+    def avoid_obstacles(self):
+        turning = False
+        for obstacle in obstacles:
+            dist_x = self.x - (obstacle.x + OBSTACLE_SIZE // 2)
+            dist_y = self.y - (obstacle.y + OBSTACLE_SIZE // 2)
+            distance = math.sqrt(dist_x**2 + dist_y**2)
+
+            if distance < SAFE_DISTANCE:
+                turning = True
+                angle_to_obstacle = math.atan2(dist_y, dist_x)
+                avoidance_angle = angle_to_obstacle + math.pi / 2
+                avoidance_distance = max(SAFE_DISTANCE - distance, MIN_OBSTACLE_DISTANCE)
+                
+                self.dx = avoidance_distance * math.cos(avoidance_angle)
+                self.dy = avoidance_distance * math.sin(avoidance_angle)
+                self.heading = math.atan2(self.dy, self.dx)
+                break
+
+        if turning:
+            self.velocity = self.default_velocity * TURN_SPEED_FACTOR
+        else:
+            self.velocity = self.default_velocity
+
+    def move(self):
+        # Land the drone if battery is 5% or less
+        if self.battery <= 5 and not self.landing and not self.recharging:
+            self.landing = True
+            print("Drone is landing due to low battery!")
+            pygame.time.wait(3000)  # Wait for 3 seconds
+            self.battery = RECHARGE_TO_PERCENT
+            self.recharging = True
+            self.landing = False
+            print(f"Drone has recharged to {RECHARGE_TO_PERCENT}% and is taking off!")
+            self.last_battery_check = self.battery  # Reset battery check after recharging
+
+        if self.recharging:
+            # Continue to recharge to 100% until the battery is full
+            if self.battery < RECHARGE_TO_PERCENT:
+                self.battery += SOLAR_GENERATION_PERCENT + REGENERATIVE_MOTOR_PERCENT
+                self.battery = min(self.battery, RECHARGE_TO_PERCENT)
+            else:
+                self.recharging = False
+            return  # Stop moving if recharging
+
+        # Move the drone
+        prev_x, prev_y = self.x, self.y
+        self.x += self.dx
+        self.y += self.dy
+        self.x = max(min(self.x, WIDTH - DRONE_SIZE), 0)
+        self.y = max(min(self.y, HEIGHT - DRONE_SIZE), 0)
+
+        # Calculate distance traveled in cm
+        distance_traveled_cm = math.sqrt((self.x - prev_x) ** 2 + (self.y - prev_y) ** 2)
+
+        # Convert distance traveled from cm to km
+        distance_traveled_km = distance_traveled_cm * DISTANCE_CONVERSION_FACTOR
+
+        # Update battery based on distance traveled
+        battery_consumed = distance_traveled_km * BATTERY_CONSUMPTION_PER_KM
+        self.battery -= battery_consumed
+        self.battery += SOLAR_GENERATION_PERCENT + REGENERATIVE_MOTOR_PERCENT
+
+        # Ensure battery does not exceed 100% or drop below 0%
+        self.battery = min(max(self.battery, 0), 100)
+
+        # Check and print battery status if it's a multiple of 5
+        if int(self.battery) % BATTERY_CHECK_INTERVAL == 0 and self.battery != self.last_battery_check:
+            self.print_battery_status()
+            self.last_battery_check = int(self.battery)
+
+        # Detect if the heading has changed significantly
+        if abs(self.heading - self.last_heading) > TURN_ANGLE:
+            self.print_heading()
+            self.last_heading = self.heading
+
+        self.update_direction()
+
+    def print_heading(self):
+        heading_degrees = math.degrees(self.heading) % 360
+        print(f"New direction: {heading_degrees:.2f} degrees")
+
+    def print_battery_status(self):
+        print(f"Current battery: {self.battery:.2f}%")
+
+    def draw(self):
+        pygame.draw.rect(screen, GREEN, (self.x, self.y, DRONE_SIZE, DRONE_SIZE))
+
+# Define obstacle class
+class Obstacle:
+    def __init__(self):
+        # Ensure obstacles are not placed too close to the end point
+        margin = 100  # Margin to keep obstacles away from the end point
+        self.x = random.randint(0, WIDTH - OBSTACLE_SIZE)
+        self.y = random.randint(0, HEIGHT - OBSTACLE_SIZE)
+        
+        # Adjust position if too close to the end point
+        end_x, end_y = END_POINT
+        while (abs(self.x - end_x) < margin and abs(self.y - end_y) < margin):
+            self.x = random.randint(0, WIDTH - OBSTACLE_SIZE)
+            self.y = random.randint(0, HEIGHT - OBSTACLE_SIZE)
+
+    def draw(self):
+        pygame.draw.rect(screen, RED, (self.x, self.y, OBSTACLE_SIZE, OBSTACLE_SIZE))
+
+# Define start and end points
+START_POINT = (50, 50)
+END_POINT = (WIDTH - 70, HEIGHT - 70)
+
+# Create drone and obstacles
+drone = Drone(START_POINT[0], START_POINT[1], END_POINT[0], END_POINT[1])
+obstacles = [Obstacle() for _ in range(10)]
+
+# Main loop
+running = True
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    # Move drone autonomously
+    drone.avoid_obstacles()
+    drone.move()
+
+    # Check if the drone has reached the end point
+    if (abs(drone.x - END_POINT[0]) < DRONE_SIZE and
+        abs(drone.y - END_POINT[1]) < DRONE_SIZE):
+        print("Drone has reached the end point!")
+        running = False
+
+    # Draw everything
+    screen.fill(WHITE)
+    pygame.draw.circle(screen, BLUE, START_POINT, 10)  # Start point
+    pygame.draw.circle(screen, BLUE, END_POINT, 10)    # End point
+    drone.draw()
+    for obstacle in obstacles:
+        obstacle.draw()
+    pygame.display.flip()
+    pygame.time.Clock().tick(30)
+
+pygame.quit()
+
